@@ -10,7 +10,6 @@
 model wildfiresim
 
 
-
 global {
 	// GIS 
 	grid_file grid_data <- grid_file("../includes/Sagua de Tánamo/Sagua de Tánamo.tif");	// File containing the GIS information
@@ -24,19 +23,20 @@ global {
 	// Fire related
 	int cells_on_fire <- 1;	// Number of cells on fire
 	int cells_burned <- 1;	// Number of cells burned
-	//cell fire_source <- one_of(cell);	// Fire source. Random position on the raster
+	cell fire_source <- one_of(cell);
 
 	
 	// Fuel related
-	float base_fuel <- 0.85	min:0.0 max:1.0;	// Base fuel. Related to fuel internal composition
-	float diminish_factor <- 0.01	min:0.0 max:0.3;	// Factor for diminishing fire intensity
+	float fuel_base <- 0.85	min:0.0 max:1.0;	// Base fuel. Related to fuel internal composition and surface
+	float fuel_humid <- 0.5	min:0.0 max:1.0;	// Humidity of the fuel
+	float diminish_factor <- 0.01	min:0.0 max:1.0;	// Factor for diminishing fire intensity
 	
 	
 	// Weather related
-	int humidity <- 75	min:50 max:100;
-	int wind_direction <- 0	min:0 max:360;
-	float wind_speed <- 15.0	min:0.0 max:50.0;
-	float temperature <- 25.0	min:0.0 max:40.0;
+	float temp <- 0.5	min:0.0 max:1.0;
+	float wind_speed <- 0.5	min:0.0 max:1.0;
+	float relat_humid <- 0.5	min:0.0 max:1.0;
+	string wind_direction <- 'N'	among:['N', 'E', 'S', 'W'];
 	
 	
 	// Data related
@@ -49,8 +49,7 @@ global {
 		min_value <- cell min_of (each.grid_value);
 		max_value <- cell max_of (each.grid_value);
 		
-		// Starts a fire
-		//fire_source.on_fire <- true;
+		fire_source.on_fire <- true;
 		
 		
 		// Creates a grey scale visual reference for altitude
@@ -62,27 +61,8 @@ global {
 	}	
 		
 	
-	reflex upd_sim {
-//		write fire_source.grid_x;
-//		write fire_source.grid_y;
-//		write fire_source.on_fire;
-//		write fire_source.fuel;
-//		write fire_source.fire_intensity;
-		
-		
-		list<cell> fires <- (cell where each.on_fire);
-		
-		loop f	over: fires {
-			cell neigh <- one_of(f.neighbors1 where (!each.on_fire and !each.burned) );
-			
-			if(neigh != nil and flip(f.fire_intensity) ) {
-				neigh.on_fire <- true;
-				
-				cells_on_fire <- cells_on_fire + 1;
-			}
-		} 
-		
-		if(cycle = 300 or cells_on_fire >= 300 * 250) {
+	reflex stop_sim {
+		if(cells_on_fire >= 300 * 250) {
 			do pause;
 		}
 	}
@@ -108,13 +88,13 @@ grid cell	file:grid_data {
 	
 
 	// Fuel
-	float fuel <- base_fuel	min:0.0 max:1.0;
+	float fuel <- fuel_base	min:0.0 max:1.0;
 	
 	
 	// Fire
 	bool on_fire <- false;
 	bool burned <- false;
-	float fire_intensity <- (fuel + 0.18 - 0.09) * (0.175 + 0.075)	min:0.0 max:1.0 update:(on_fire)? (fuel + 0.15 - 0.09) * (0.175 + 0.075) : 0.0;
+	float fire_intensity <- 0.5	min:0.0 max:1.0 update:(!on_fire)? (fuel + 0.15 - 0.09) * (0.175 + 0.075) : 0.0;
 
 
 
@@ -126,21 +106,58 @@ grid cell	file:grid_data {
 	}
 
 
+	reflex propagate	when:on_fire {
+		list<cell> neigh <- neighbors1 where (!each.on_fire and !each.burned);
+		cell n <- one_of(neigh);
+		
+		
+		if(n != nil) {
+			switch wind_direction {
+				match 'N' {
+					if(n.grid_y > self.grid_y) {
+						n.fire_intensity <- n.fire_intensity + 0.1;
+					}
+				}
+				match 'E' {
+					if(n.grid_x > self.grid_x) {
+						n.fire_intensity <- n.fire_intensity + 0.1;
+					}
+				}
+				match 'S' {
+					if(n.grid_y < self.grid_y) {
+						n.fire_intensity <- n.fire_intensity + 0.1;
+					}
+				}
+				match 'W' {
+					if(n.grid_x > self.grid_x) {
+						n.fire_intensity <- n.fire_intensity + 0.1;
+					}
+				}
+			}
+		}
+		
+		if(n != nil and flip(n.fire_intensity) ) {
+			ask n {
+				do set_fire;
+			}
+			
+			cells_on_fire <- cells_on_fire + 1;
+		}	
+	}
+
+
 	reflex update_color {
 		if(on_fire) {
 			color <- rgb(255 * fire_intensity, 0, 0);
 		} else if(burned) {
 			int val <- int(255 * ( 1  - (grid_value - min_value) / (max_value - min_value) ) );
-			
-			//color <- rgb(val - 100, val - 100 , val - 100);
+		
 			color <- rgb(val, val, val - 100);
 		}
     }
     
-    reflex fuel_regulation {
-    	if(on_fire) {
-    		fuel <- fuel - diminish_factor;
-    	}
+    reflex fuel_regulation	when:on_fire {
+		fuel <- fuel - diminish_factor;
     }
     
    	reflex burned {
@@ -152,24 +169,19 @@ grid cell	file:grid_data {
    			cells_burned <- cells_burned + 1;
    		}
    	}
-    
-//    reflex smokey {
-//		if(!on_fire) {
-//			fire_intensity <- length(neighbors1 where each.on_fire) * 35;
-//		}
-//    }
 }
 
 
 
 experiment wildfiresim	type:gui {
-	parameter "Combustible base"	var:base_fuel min:0.0 max:0.3 category:"Combustibles";
-	parameter "Factor de disminución de la combustión"	var:diminish_factor min:0.0 max:0.3 category:"Combustibles";
+	parameter "Combustible base"	var:fuel_base min:0.0 max:1.0 category:"Combustibles";
+	parameter "Contenido de humedad del combustible"	var:fuel_humid	min:0.0 max:1.0 category:"Combustible";
+	parameter "Factor de disminución de la combustión"	var:diminish_factor min:0.0 max:1.0 category:"Combustibles";
 	
-	parameter "Humedad"	var:humidity min:50 max:100 category:"Clima";
-	parameter "Dirección del viento"	var:wind_direction min:0 max:360 category:"Clima";
+	parameter "Temperatura"	var:temp min:0.0 max:1.0 category:"Clima";
+	parameter "Humedad relativa"	var:relat_humid min:0.0 max:1.0 category:"Clima";
+	parameter "Dirección del viento"	var:wind_direction category:"Clima";
 	parameter "Velocidad del viento"	var:wind_speed min:0.0 max:50.0 category:"Clima";
-	parameter "Temperatura"	var:temperature min:0.0 max:40.0 category:"Clima";
 	
 	
 	
